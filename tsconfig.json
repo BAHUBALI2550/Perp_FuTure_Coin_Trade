@@ -1,0 +1,11 @@
+{
+  "compilerOptions": {
+    "module": "commonjs",
+    "target": "es2020",
+    "esModuleInterop": true,
+    "moduleResolution": "node",
+    "strict": true,
+    "skipLibCheck": true
+  },
+  "include": ["escrow/trading_escrow/programs/trading_escrow/tests/**/*.ts", "programs/**/*", "tests/**/*"]
+}
