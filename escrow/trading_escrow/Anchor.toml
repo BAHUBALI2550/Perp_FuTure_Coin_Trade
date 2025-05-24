@@ -6,10 +6,10 @@ resolution = true
 skip-lint = false
 
 [programs.localnet]
-trading_escrow = "gv4Ep7vbpPgHfTkZbgb834Jyve2mH19iSqCsQy6oukn"
+trading_escrow = "5ZHtRgU8gaPUMjUkWBFjxNF9o5m7Cr4jJ71PXTiE6TKc"
 
 [programs.devnet]
-trading_escrow = "gv4Ep7vbpPgHfTkZbgb834Jyve2mH19iSqCsQy6oukn"
+trading_escrow="5ZHtRgU8gaPUMjUkWBFjxNF9o5m7Cr4jJ71PXTiE6TKc"
 
 [registry]
 url = "https://api.apr.dev"
@@ -19,12 +19,13 @@ url = "https://api.apr.dev"
 # wallet = '~\.config\solana\id.json'
 
 [provider]
-wallet = "/mnt/d/INVESTMENT/stock_mar/stock/phantom-keypair.json"
-cluster = "https://api.devnet.solana.com"
+cluster = "devnet"
+wallet = "./deployer.json"
+
 
 [scripts]
 test = "yarn run ts-mocha --loader node_modules/ts-node/esm.mjs -p ../../tsconfig.json './tests/release_funds.test.ts'"
-
+initialize = "node ./programs/trading_escrow/scripts/initialize.js"
 
 
 [build]

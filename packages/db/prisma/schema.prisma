@@ -33,6 +33,9 @@ model User {
   openTime     DateTime
   closeTime    DateTime?
   lastFeeCalculatedTime    DateTime 
+  escrowAccount       String    // PDA of the escrow account
+  vaultTokenAccount   String    // PDA of the vault token account
+  onchainPositionId   String
 }
 
 model UserClosed {
@@ -54,6 +57,9 @@ model UserClosed {
   openTime     DateTime
   closeTime    DateTime
   lastFeeCalculatedTime    DateTime? 
+  escrowAccount       String
+  vaultTokenAccount   String
+  onchainPositionId   String
 }
 
 enum PositionType {

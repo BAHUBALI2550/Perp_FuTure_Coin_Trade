@@ -1,162 +1,126 @@
 use anchor_lang::prelude::*;
-use anchor_spl::token::{self, Token, TokenAccount, Transfer};
 
-declare_id!("gv4Ep7vbpPgHfTkZbgb834Jyve2mH19iSqCsQy6oukn");
-
+declare_id!("5ZHtRgU8gaPUMjUkWBFjxNF9o5m7Cr4jJ71PXTiE6TKc");
 
 #[program]
-pub mod escrow {
+pub mod trading_escrow {
     use super::*;
 
-    pub fn deposit_funds(
-        ctx: Context<DepositFunds>,
-        amount: u64,
-        _position_id: String,
+    pub fn initialize(
+        ctx: Context<Initialize>, 
+        vault: Pubkey, 
+        backend: Pubkey
     ) -> Result<()> {
-        let ix = anchor_lang::solana_program::system_instruction::transfer(
-            ctx.accounts.user.key,
-            ctx.accounts.vault.key,
-            amount,
-        );
-        anchor_lang::solana_program::program::invoke(
-            &ix,
-            &[
-                ctx.accounts.user.to_account_info(),
-                ctx.accounts.vault.to_account_info(),
-            ],
-        )?;
+        // Validate that provided vault and backend addresses are not default
+        require!(vault != Pubkey::default(), ErrorCode::InvalidVault);
+        require!(backend != Pubkey::default(), ErrorCode::InvalidBackend);
+        
+        // Assuming you want to store these values or use them somehow.
+        // Since we're not storing them in a Config struct or similar, we'll just log them.
+        msg!("Vault set to: {:?}", vault);
+        msg!("Backend set to: {:?}", backend);
+        // If you want to save these addresses, you'd typically manage this in state.
+        // You might need to handle logic around these accounts depending on your use case.
+        // Currently, no action is required to initialize them in this context.
         Ok(())
     }
 
-    pub fn release_funds(
-        ctx: Context<ReleaseFunds>,
-        total_payout: u64,
-        total_fee: i64,
-    ) -> Result<()> {
-        let vault = &ctx.accounts.vault;
-        let vault_bump = ctx.bumps.vault;
-        let escrow_key = ctx.accounts.escrow.key(); // bind to keep it alive
-        let seeds = &[b"vault", escrow_key.as_ref(), &[vault_bump]];
-        let signer_seeds = &[&seeds[..]];
+    pub fn deposit(ctx: Context<Deposit>, amount: u64) -> Result<()> {
+        let depositor = &ctx.accounts.depositor;
+        let vault = &mut ctx.accounts.vault;
 
-        if total_fee >= 0 {
-            let fee_u64 = total_fee as u64;
-            require!(total_payout > fee_u64, EscrowError::InsufficientPayout);
+        // Transfer SOL from user to vault
+        **depositor.to_account_info().try_borrow_mut_lamports()? -= amount;
+        **vault.to_account_info().try_borrow_mut_lamports()? += amount;
+        Ok(())
+    }
 
-            let payout_to_user = total_payout - fee_u64;
+   pub fn liquidate(ctx: Context<Liquidate>, fee: i64, amount: u64) -> Result<()> {
+    let vault = &mut ctx.accounts.vault;
+    let backend = &mut ctx.accounts.backend;
+    let user = &mut ctx.accounts.user;
 
-            token::transfer(
-                CpiContext::new_with_signer(
-                    ctx.accounts.token_program.to_account_info(),
-                    Transfer {
-                        from: vault.to_account_info(),
-                        to: ctx.accounts.backend_token_account.to_account_info(),
-                        authority: vault.to_account_info(),
-                    },
-                    signer_seeds,
-                ),
-                fee_u64,
-            )?;
+    let vault_balance = **vault.to_account_info().lamports.borrow();
 
-            token::transfer(
-                CpiContext::new_with_signer(
-                    ctx.accounts.token_program.to_account_info(),
-                    Transfer {
-                        from: vault.to_account_info(),
-                        to: ctx.accounts.user_token_account.to_account_info(),
-                        authority: vault.to_account_info(),
-                    },
-                    signer_seeds,
-                ),
-                payout_to_user,
-            )?;
+    // Check if amount to liquidate is valid
+    if amount > vault_balance {
+        return Err(ErrorCode::InvalidLiquidationAmount.into());
+    }
+
+    // Determine fee and remaining
+    if fee >= 0 {
+        let fee_amount = fee as u64;
+        // Adjust vault and backend for fee
+        **vault.to_account_info().try_borrow_mut_lamports()? -= fee_amount;
+        **backend.to_account_info().try_borrow_mut_lamports()? += fee_amount;
+
+        // Transfer only the specified amount to user
+        **vault.to_account_info().try_borrow_mut_lamports()? -= amount;
+        **user.try_borrow_mut_lamports()? += amount;
+
+    } else {
+        // Negative fee
+        let fee_amount = (-fee) as u64;
+
+        if **backend.to_account_info().lamports.borrow() >= fee_amount {
+            // Deduct fee from backend
+            **backend.to_account_info().try_borrow_mut_lamports()? -= fee_amount;
+            // Send fee plus amount to user
+            **backend.to_account_info().try_borrow_mut_lamports()? -= amount;
+            **user.try_borrow_mut_lamports()? += amount + fee_amount;
         } else {
-            let fee_u64 = (-total_fee) as u64;
-            let total_user_payout = total_payout + fee_u64;
-
-            token::transfer(
-                CpiContext::new(
-                    ctx.accounts.token_program.to_account_info(),
-                    Transfer {
-                        from: ctx.accounts.backend_token_account.to_account_info(),
-                        to: vault.to_account_info(),
-                        authority: ctx.accounts.backend.to_account_info(),
-                    },
-                ),
-                fee_u64,
-            )?;
-
-            token::transfer(
-                CpiContext::new_with_signer(
-                    ctx.accounts.token_program.to_account_info(),
-                    Transfer {
-                        from: vault.to_account_info(),
-                        to: ctx.accounts.user_token_account.to_account_info(),
-                        authority: vault.to_account_info(),
-                    },
-                    signer_seeds,
-                ),
-                total_user_payout,
-            )?;
+            // Not enough funds in backend
+            let backend_balance = **backend.to_account_info().lamports.borrow();
+            **backend.to_account_info().try_borrow_mut_lamports()? -= backend_balance;
+            **user.try_borrow_mut_lamports()? += backend_balance + amount;
         }
-
-        Ok(())
     }
+
+    Ok(())
+}
 }
 
-#[account]
-pub struct EscrowAccount {
-    pub initializer: Pubkey,
-    pub created_at: i64,
-    pub vault_bump: u8,
-    pub vault: Pubkey, // just the vault's address
-    // Add whatever fields you need to track for your escrow
-}
-
+// Contexts
 #[derive(Accounts)]
-pub struct DepositFunds<'info> {
-    #[account(mut)]
-    pub user: Signer<'info>,
-    /// CHECK: This is a PDA vault account and its validity is ensured via seeds and bump
+pub struct Initialize<'info> {
+    /// CHECK: We are trusting this account (e.g., PDA or external account)
     #[account(mut)]
     pub vault: AccountInfo<'info>,
-    pub system_program: Program<'info, System>,
+    /// CHECK: This account is controlled externally
+    #[account(mut)]
+    pub backend: AccountInfo<'info>,
+    #[account(mut)]
+    pub owner: Signer<'info>,
 }
 
 #[derive(Accounts)]
-pub struct ReleaseFunds<'info> {
-    #[account(
-        mut,
-        seeds = [b"vault", escrow.key().as_ref()],
-        bump,
-    )]
-    pub vault: Account<'info, TokenAccount>,
-
+pub struct Deposit<'info> {
     #[account(mut)]
-    pub escrow: Account<'info, EscrowAccount>,
-
-    /// CHECK: destination is a generic SPL token account (used as fallback if needed)
+    pub depositor: Signer<'info>,
+    /// CHECK: We are trusting this account (e.g., PDA or external account)
     #[account(mut)]
-    pub destination: Account<'info, TokenAccount>,
+    pub vault: AccountInfo<'info>,
+}
 
+#[derive(Accounts)]
+pub struct Liquidate<'info> {
+    /// CHECK: We are trusting this account (e.g., PDA or external account)
     #[account(mut)]
-    pub backend_token_account: Account<'info, TokenAccount>,
-
+    pub vault: AccountInfo<'info>,
+    /// CHECK: This account is controlled externally
     #[account(mut)]
-    pub user_token_account: Account<'info, TokenAccount>,
-
-    /// CHECK: backend is a signer and only used for authority check
-    #[account(signer)]
     pub backend: AccountInfo<'info>,
-
-    #[account(signer)]
-    pub authority: Signer<'info>,
-
-    pub token_program: Program<'info, Token>,
+    /// CHECK: This account is controlled externally
+    #[account(mut)]
+    pub user: AccountInfo<'info>,
 }
 
 #[error_code]
-pub enum EscrowError {
-    #[msg("Total payout must be greater than fee")]
-    InsufficientPayout,
+pub enum ErrorCode {
+    #[msg("Invalid vault address")]
+    InvalidVault,
+    #[msg("Invalid backend address")]
+    InvalidBackend,
+    #[msg("Invalid liquidation amount")]
+    InvalidLiquidationAmount,
 }
