@@ -49,8 +49,8 @@ function calculatePnL(position) {
   const { positionType, entryPrice, markPrice, currentPositionSize, leverage, currentPrice, collateral } = position;
 
   const c = collateral/1000000000;
-  const r = currentPositionSize/(entryPrice * leverage);
-  const g = currentPrice*r;
+  const r = currentPositionSize/(entryPrice * leverage); // current coin amount
+  const g = currentPrice*r; // current coin price
   if(g >= c)
   {
     const s = (g-c);
@@ -147,7 +147,7 @@ async function updatePositionPrice() {
         });
       }
 
-      continue; // Skip emit for open position
+      continue;
     }
 
     if (userSockets[userId]) {
@@ -155,7 +155,6 @@ async function updatePositionPrice() {
         id: position.id,
         markPrice: parseFloat(markPrice.toFixed(4)),
         currentPnL: parseFloat(currentPnL.toFixed(4)),
-        // include other fields if needed
       })
     }
   }
@@ -379,7 +378,7 @@ app.delete("/api/v1/positions/:id", async (req, res) => {
     // Remove from User
     await prismaClient.user.delete({ where: { id: positionId } });
 
-    const payoutSol = position.collateral + position.currentPnL - position.totalFees;
+    const payoutSol = position.currentPositionSize + position.currentPnL - position.totalFees;
     const payoutLamports = Math.max(Math.floor(payoutSol), 0); 
 
     if (payoutLamports > 0) {

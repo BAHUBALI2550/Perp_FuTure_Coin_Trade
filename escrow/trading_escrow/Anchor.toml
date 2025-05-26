@@ -6,7 +6,7 @@ resolution = true
 skip-lint = false
 
 [programs.localnet]
-trading_escrow = "5ZHtRgU8gaPUMjUkWBFjxNF9o5m7Cr4jJ71PXTiE6TKc"
+trading_escrow="5ZHtRgU8gaPUMjUkWBFjxNF9o5m7Cr4jJ71PXTiE6TKc"
 
 [programs.devnet]
 trading_escrow="5ZHtRgU8gaPUMjUkWBFjxNF9o5m7Cr4jJ71PXTiE6TKc"
@@ -26,6 +26,8 @@ wallet = "./deployer.json"
 [scripts]
 test = "yarn run ts-mocha --loader node_modules/ts-node/esm.mjs -p ../../tsconfig.json './tests/release_funds.test.ts'"
 initialize = "node ./programs/trading_escrow/scripts/initialize.js"
+deposit = "node ./programs/trading_escrow/scripts/deposit.js"
+release = "node ./programs/trading_escrow/scripts/release.js"
 
 
 [build]

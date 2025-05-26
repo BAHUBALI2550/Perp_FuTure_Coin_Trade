@@ -1,126 +1,200 @@
+
 use anchor_lang::prelude::*;
 
 declare_id!("5ZHtRgU8gaPUMjUkWBFjxNF9o5m7Cr4jJ71PXTiE6TKc");
+
+// Error codes for better debugging
+#[error_code]
+pub enum ErrorCode {
+    #[msg("Unauthorized backend")]
+    UnauthorizedBackend,
+    #[msg("Insufficient vault balance")]
+    InsufficientVaultBalance,
+    #[msg("Insufficient backend balance for transfer")]
+    InsufficientBackendBalance,
+    #[msg("Withdrawal overflow/underflow")]
+    WithdrawalArithmeticError,
+}
+
+// Each deposit by user is stored in this struct
+#[account]
+pub struct UserAccount {
+    pub user: Pubkey,
+    pub deposit_amount: u64,      // In lamports
+    pub bump: u8,
+}
+
+// Stores settings and authority pubkeys
+#[account]
+pub struct VaultState {
+    pub bump: u8,
+    pub authority: Pubkey,        // Backend authority key
+    pub backend_wallet: Pubkey,   // Backend's hot wallet for liquidation
+    pub sol_vault: Pubkey,        // PDA of Sol vault
+    pub total_deposit: u64,
+}
 
 #[program]
 pub mod trading_escrow {
     use super::*;
 
+    // Initialize vault with backend authority
     pub fn initialize(
         ctx: Context<Initialize>, 
-        vault: Pubkey, 
-        backend: Pubkey
+        backend_wallet: Pubkey,
     ) -> Result<()> {
-        // Validate that provided vault and backend addresses are not default
-        require!(vault != Pubkey::default(), ErrorCode::InvalidVault);
-        require!(backend != Pubkey::default(), ErrorCode::InvalidBackend);
-        
-        // Assuming you want to store these values or use them somehow.
-        // Since we're not storing them in a Config struct or similar, we'll just log them.
-        msg!("Vault set to: {:?}", vault);
-        msg!("Backend set to: {:?}", backend);
-        // If you want to save these addresses, you'd typically manage this in state.
-        // You might need to handle logic around these accounts depending on your use case.
-        // Currently, no action is required to initialize them in this context.
+        let vault_state = &mut ctx.accounts.vault_state;
+        vault_state.bump = ctx.bumps.vault_state;
+        vault_state.authority = ctx.accounts.authority.key();
+        vault_state.backend_wallet = backend_wallet;
+        vault_state.sol_vault = ctx.accounts.sol_vault.key();
+        vault_state.total_deposit = 0;
         Ok(())
     }
 
+    // Called by user to deposit SOL for a stock
     pub fn deposit(ctx: Context<Deposit>, amount: u64) -> Result<()> {
-        let depositor = &ctx.accounts.depositor;
-        let vault = &mut ctx.accounts.vault;
-
-        // Transfer SOL from user to vault
-        **depositor.to_account_info().try_borrow_mut_lamports()? -= amount;
-        **vault.to_account_info().try_borrow_mut_lamports()? += amount;
+        let user_acct = &mut ctx.accounts.user_account;
+        // Transfer SOL from user to the vault (PDA)
+        let ix = anchor_lang::solana_program::system_instruction::transfer(
+            &ctx.accounts.user.key(),
+            &ctx.accounts.sol_vault.key(),
+            amount,
+        );
+        anchor_lang::solana_program::program::invoke(
+            &ix,
+            &[
+                ctx.accounts.user.to_account_info(),
+                ctx.accounts.sol_vault.to_account_info(),
+            ],
+        )?;
+        user_acct.user = ctx.accounts.user.key();
+        user_acct.deposit_amount = user_acct.deposit_amount.checked_add(amount)
+            .ok_or(ErrorCode::WithdrawalArithmeticError)?;
+        ctx.accounts.vault_state.total_deposit = ctx.accounts.vault_state.total_deposit.checked_add(amount)
+            .ok_or(ErrorCode::WithdrawalArithmeticError)?;
         Ok(())
     }
 
-   pub fn liquidate(ctx: Context<Liquidate>, fee: i64, amount: u64) -> Result<()> {
-    let vault = &mut ctx.accounts.vault;
-    let backend = &mut ctx.accounts.backend;
-    let user = &mut ctx.accounts.user;
+    // Liquidation: called by backend
+    // collateral: how much to take for backend
+    // to_transfer: if >0, amount to send from backend_wallet to user (e.g. refund on partial liquidation)
+    #[access_control(only_backend(&ctx.accounts.vault_state, &ctx.accounts.backend_authority))]
+    pub fn liquidate(
+        ctx: Context<Liquidate>,
+        collateral: u64,
+        to_transfer: i64,
+    ) -> Result<()> {
+        let vault_lamports = ctx.accounts.sol_vault.to_account_info().lamports();
+        require!(collateral <= vault_lamports, ErrorCode::InsufficientVaultBalance);
 
-    let vault_balance = **vault.to_account_info().lamports.borrow();
+        // Transfer collateral from vault to backend_wallet
+        **ctx.accounts.sol_vault.to_account_info().try_borrow_mut_lamports()? -= collateral;
+        **ctx.accounts.backend_wallet.to_account_info().try_borrow_mut_lamports()? += collateral;
 
-    // Check if amount to liquidate is valid
-    if amount > vault_balance {
-        return Err(ErrorCode::InvalidLiquidationAmount.into());
-    }
-
-    // Determine fee and remaining
-    if fee >= 0 {
-        let fee_amount = fee as u64;
-        // Adjust vault and backend for fee
-        **vault.to_account_info().try_borrow_mut_lamports()? -= fee_amount;
-        **backend.to_account_info().try_borrow_mut_lamports()? += fee_amount;
-
-        // Transfer only the specified amount to user
-        **vault.to_account_info().try_borrow_mut_lamports()? -= amount;
-        **user.try_borrow_mut_lamports()? += amount;
-
-    } else {
-        // Negative fee
-        let fee_amount = (-fee) as u64;
-
-        if **backend.to_account_info().lamports.borrow() >= fee_amount {
-            // Deduct fee from backend
-            **backend.to_account_info().try_borrow_mut_lamports()? -= fee_amount;
-            // Send fee plus amount to user
-            **backend.to_account_info().try_borrow_mut_lamports()? -= amount;
-            **user.try_borrow_mut_lamports()? += amount + fee_amount;
-        } else {
-            // Not enough funds in backend
-            let backend_balance = **backend.to_account_info().lamports.borrow();
-            **backend.to_account_info().try_borrow_mut_lamports()? -= backend_balance;
-            **user.try_borrow_mut_lamports()? += backend_balance + amount;
+        // If backend needs to return some funds to the user (e.g. after a stoploss triggers)
+        if to_transfer > 0 {
+            let amount = to_transfer as u64;
+            let backend_balance = ctx.accounts.backend_wallet.to_account_info().lamports();
+            require!(amount <= backend_balance, ErrorCode::InsufficientBackendBalance);
+            **ctx.accounts.backend_wallet.to_account_info().try_borrow_mut_lamports()? -= amount;
+            **ctx.accounts.user.to_account_info().try_borrow_mut_lamports()? += amount;
         }
+        // Optionally: update user's and vault_state's internal accounting
+        // For illustration, we'll reduce user_account.deposit_amount by collateral, not tracking remainders/refunds
+        ctx.accounts.user_account.deposit_amount = 0;
+        ctx.accounts.vault_state.total_deposit = ctx.accounts.vault_state.total_deposit.checked_sub(collateral)
+            .ok_or(ErrorCode::WithdrawalArithmeticError)?;
+        Ok(())
     }
+}
 
+// Checks that the caller is the backend authority
+fn only_backend(vault_state: &Account<VaultState>, signer: &Signer) -> Result<()> {
+    require!(vault_state.authority == signer.key(), ErrorCode::UnauthorizedBackend);
     Ok(())
 }
-}
 
-// Contexts
+// Instruction context (account) structs:
 #[derive(Accounts)]
+#[instruction()]
 pub struct Initialize<'info> {
-    /// CHECK: We are trusting this account (e.g., PDA or external account)
     #[account(mut)]
-    pub vault: AccountInfo<'info>,
-    /// CHECK: This account is controlled externally
-    #[account(mut)]
-    pub backend: AccountInfo<'info>,
-    #[account(mut)]
-    pub owner: Signer<'info>,
+    pub authority: Signer<'info>,
+    #[account(
+        init,
+        payer = authority,
+        space = 8 + 1 + 32 + 32 + 32 + 8,
+        seeds = [b"vault-state"],
+        bump,
+    )]
+    pub vault_state: Account<'info, VaultState>,
+    #[account(
+        mut,
+        seeds = [b"sol-vault"],
+        bump,
+    )]
+    /// CHECK: Vault holds SOL (system account), owned by PDA
+    pub sol_vault: UncheckedAccount<'info>,
+    pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]
 pub struct Deposit<'info> {
+    /// CHECK: System account for user wallet
     #[account(mut)]
-    pub depositor: Signer<'info>,
-    /// CHECK: We are trusting this account (e.g., PDA or external account)
-    #[account(mut)]
-    pub vault: AccountInfo<'info>,
+    pub user: Signer<'info>,
+    #[account(
+        mut,
+        seeds = [b"vault-state"],
+        bump = vault_state.bump,
+    )]
+    pub vault_state: Account<'info, VaultState>,
+    #[account(
+        mut,
+        seeds = [b"user-acct", user.key().as_ref()],
+        bump,
+    )]
+    pub user_account: Account<'info, UserAccount>,
+    #[account(
+        mut,
+        seeds = [b"sol-vault"],
+        bump,
+    )]
+    /// CHECK: System account for vaulting SOL
+    pub sol_vault: UncheckedAccount<'info>,
+    pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]
 pub struct Liquidate<'info> {
-    /// CHECK: We are trusting this account (e.g., PDA or external account)
     #[account(mut)]
-    pub vault: AccountInfo<'info>,
-    /// CHECK: This account is controlled externally
+    pub backend_authority: Signer<'info>,
+    #[account(
+        mut,
+        seeds = [b"vault-state"],
+        bump = vault_state.bump,
+    )]
+    pub vault_state: Account<'info, VaultState>,
+    #[account(
+        mut,
+        seeds = [b"user-acct", user.key().as_ref()],
+        bump,
+    )]
+    pub user_account: Account<'info, UserAccount>,
+    /// CHECK: System account for backend wallet
     #[account(mut)]
-    pub backend: AccountInfo<'info>,
-    /// CHECK: This account is controlled externally
+    pub backend_wallet: UncheckedAccount<'info>,
+    /// CHECK: System account for user wallet
     #[account(mut)]
-    pub user: AccountInfo<'info>,
+    pub user: UncheckedAccount<'info>,
+    /// CHECK: Vault holds SOL (system account), owned by PDA
+    #[account(
+        mut,
+        seeds = [b"sol-vault"],
+        bump,
+    )]
+    pub sol_vault: UncheckedAccount<'info>,
+    pub system_program: Program<'info, System>,
 }
 
-#[error_code]
-pub enum ErrorCode {
-    #[msg("Invalid vault address")]
-    InvalidVault,
-    #[msg("Invalid backend address")]
-    InvalidBackend,
-    #[msg("Invalid liquidation amount")]
-    InvalidLiquidationAmount,
-}
