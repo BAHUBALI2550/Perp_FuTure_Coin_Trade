@@ -52,9 +52,25 @@ pub mod trading_escrow {
         Ok(())
     }
 
+    pub fn initialize_user_account(ctx: Context<InitializeUserAccount>) -> Result<()> {
+        let user_acct = &mut ctx.accounts.user_account;
+        user_acct.user = ctx.accounts.user.key();
+        user_acct.deposit_amount = 0;
+        user_acct.bump = ctx.bumps.user_account;
+        Ok(())
+    }
+
     // Called by user to deposit SOL for a stock
     pub fn deposit(ctx: Context<Deposit>, amount: u64) -> Result<()> {
         let user_acct = &mut ctx.accounts.user_account;
+
+        // Check if the user account is already initialized
+        if user_acct.user == Pubkey::default() {
+            // Initialize the user account
+            user_acct.user = ctx.accounts.user.key();
+            user_acct.deposit_amount = 0; // Start with 0 deposits
+        }
+
         // Transfer SOL from user to the vault (PDA)
         let ix = anchor_lang::solana_program::system_instruction::transfer(
             &ctx.accounts.user.key(),
@@ -89,16 +105,39 @@ pub mod trading_escrow {
         require!(collateral <= vault_lamports, ErrorCode::InsufficientVaultBalance);
 
         // Transfer collateral from vault to backend_wallet
-        **ctx.accounts.sol_vault.to_account_info().try_borrow_mut_lamports()? -= collateral;
-        **ctx.accounts.backend_wallet.to_account_info().try_borrow_mut_lamports()? += collateral;
+        let sol_vault_bump = ctx.bumps.sol_vault;
+        let transfer_to_backend_ix = anchor_lang::solana_program::system_instruction::transfer(
+        &ctx.accounts.sol_vault.key(),
+        &ctx.accounts.backend_wallet.key(),
+        collateral,
+    );
+
+    anchor_lang::solana_program::program::invoke_signed(
+        &transfer_to_backend_ix,
+        &[
+            ctx.accounts.sol_vault.to_account_info(),
+            ctx.accounts.backend_wallet.to_account_info(),
+        ],
+        &[&[b"sol-vault", &[sol_vault_bump]]], // Use correct bump seed
+    )?;
 
         // If backend needs to return some funds to the user (e.g. after a stoploss triggers)
         if to_transfer > 0 {
             let amount = to_transfer as u64;
             let backend_balance = ctx.accounts.backend_wallet.to_account_info().lamports();
             require!(amount <= backend_balance, ErrorCode::InsufficientBackendBalance);
-            **ctx.accounts.backend_wallet.to_account_info().try_borrow_mut_lamports()? -= amount;
-            **ctx.accounts.user.to_account_info().try_borrow_mut_lamports()? += amount;
+            let transfer_back_ix = anchor_lang::solana_program::system_instruction::transfer(
+            &ctx.accounts.backend_wallet.key(),
+            &ctx.accounts.user.key(),
+            amount
+        );
+        anchor_lang::solana_program::program::invoke(
+            &transfer_back_ix,
+            &[
+                ctx.accounts.backend_wallet.to_account_info(),
+                ctx.accounts.user.to_account_info(),
+            ],
+        )?;
         }
         // Optionally: update user's and vault_state's internal accounting
         // For illustration, we'll reduce user_account.deposit_amount by collateral, not tracking remainders/refunds
@@ -111,7 +150,7 @@ pub mod trading_escrow {
 
 // Checks that the caller is the backend authority
 fn only_backend(vault_state: &Account<VaultState>, signer: &Signer) -> Result<()> {
-    require!(vault_state.authority == signer.key(), ErrorCode::UnauthorizedBackend);
+    require!(vault_state.backend_wallet == signer.key(), ErrorCode::UnauthorizedBackend);
     Ok(())
 }
 
@@ -136,6 +175,21 @@ pub struct Initialize<'info> {
     )]
     /// CHECK: Vault holds SOL (system account), owned by PDA
     pub sol_vault: UncheckedAccount<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct InitializeUserAccount<'info> {
+    #[account(mut)]
+    pub user: Signer<'info>,
+    #[account(
+        init,
+        payer = user,
+        space = 8 + 32 + 8 + 1,
+        seeds = [b"user-acct", user.key().as_ref()],
+        bump,
+    )]
+    pub user_account: Account<'info, UserAccount>,
     pub system_program: Program<'info, System>,
 }
 

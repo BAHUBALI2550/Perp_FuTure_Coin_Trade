@@ -9,4 +9,5 @@ test-ledger
 deployer.json
 vault_keypair.json
 backend_keypair.json
+user.json
 
