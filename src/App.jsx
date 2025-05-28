@@ -2,9 +2,20 @@ import React, { useState, useEffect, useCallback } from "react";
 import { ChevronDown, ChevronUp, Eye, EyeOff, Wallet, Settings, LogOut } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import io from 'socket.io-client';
-import { Connection, PublicKey, Transaction, SystemProgram } from "@solana/web3.js";
+import { Connection, PublicKey, Transaction, clusterApiUrl, SystemProgram } from '@solana/web3.js';
+import { utils, BN, Program } from '@coral-xyz/anchor';
 
+import {Buffer} from 'buffer';
+window.Buffer = window.Buffer || Buffer;
 
+// Assumes trading_escrow.json is in your public dir
+// and your build system can import JSON (or fetch it client-side)
+const PROGRAM_ID = "5ZHtRgU8gaPUMjUkWBFjxNF9o5m7Cr4jJ71PXTiE6TKc";
+const NETWORK = clusterApiUrl("devnet");
+
+function toLamports(amount) {
+  return Math.floor(Number(amount) * 1_000_000_000);
+}
 
 
 const connection = new Connection("https://api.devnet.solana.com");
@@ -471,6 +482,24 @@ function OrderPanel({ token, walletAddr }) {
     change: token.change,
   });
 
+   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [feedback, setFeedback] = useState("");
+  const [idl, setIdl] = useState(null);
+
+  useEffect(() => {
+    // Load IDL json from public folder, only once
+    (async () => {
+      try {
+        const res = await fetch('../escrow/trading_escrow/target/idl/trading_escrow.json');
+        if (!res.ok) throw new Error('IDL not found.');
+        const data = await res.json();
+        setIdl(data);
+      } catch (e) {
+        setFeedback("Failed to load program interface (IDL).");
+      }
+    })();
+  }, []);
+
   useEffect(() => {
     const fetchMarketData = async () => {
       try {
@@ -495,7 +524,14 @@ function OrderPanel({ token, walletAddr }) {
   }, []);
 
   const handleSubmit = async () => {
+    setFeedback("");
     if (!inputAmount || !walletAddr) return;
+
+    if (!idl) {
+      setFeedback("Anchor program interface loading...");
+      return;
+    }
+
     try {
       
       const backendWallet = new PublicKey(import.meta.env.VITE_BACKEND_PUBLIC_KEY);
@@ -509,23 +545,115 @@ function OrderPanel({ token, walletAddr }) {
         ? entryPrice * (1 - 1 / leverage)
         : entryPrice * (1 + 1 / leverage);
 
-      const tx = new Transaction().add(
-        SystemProgram.transfer({
-          fromPubkey: new PublicKey(walletAddr),
-          toPubkey: backendWallet,
-          lamports: inputAmount * 1000000000, // Convert SOL → lamports
-        })
+  //     const tx = new Transaction().add(
+  //       SystemProgram.transfer({
+  //         fromPubkey: new PublicKey(walletAddr),
+  //         toPubkey: backendWallet,
+  //         lamports: inputAmount * 1000000000, // Convert SOL → lamports
+  //       })
+  //     );
+
+  //     tx.feePayer = new PublicKey(walletAddr);
+  // const { blockhash } = await connection.getRecentBlockhash();
+  // tx.recentBlockhash = blockhash;
+
+  //     const signedTx = await window.solana.signTransaction(tx);
+  // const rawTx = signedTx.serialize();
+  
+    try {
+      setIsSubmitting(true);
+
+      // Setup provider/connection
+      const connection = new Connection(NETWORK, "confirmed");
+      const walletPublicKey = new PublicKey(walletAddr);
+
+      // Instantiate Program
+      const programId = new PublicKey(PROGRAM_ID);
+      const program = new Program(idl, programId);
+
+      // Find PDAs
+      const [userAccountPDA] = await PublicKey.findProgramAddressSync(
+        [
+          Buffer.from("user-acct"),
+          walletPublicKey.toBuffer()
+        ],
+        programId
       );
 
-      tx.feePayer = new PublicKey(walletAddr);
-  const { blockhash } = await connection.getRecentBlockhash();
-  tx.recentBlockhash = blockhash;
+      const [vaultStatePDA] = await PublicKey.findProgramAddressSync(
+        [Buffer.from("vault-state")],
+        programId
+      );
 
+      const [solVaultPDA] = await PublicKey.findProgramAddressSync(
+        [Buffer.from("sol-vault")],
+        programId
+      );
+
+      // initialize user account in vault, only for the first time
+      const resi = await fetch(`http://localhost:3001/api/v1/positions?walletId=${walletAddr}`);
+        if (!resi.ok) throw new Error("API failed to fetch positions");
+        const data1 = await resi.json();
+        if (!data1.positions || data1.positions.length === 0) {
+            // No positions found, initialize the user account
+            const initializeInstruction = await program.methods.initializeUserAccount()
+                .accounts({
+                    user: walletPublicKey,
+                    userAccount: userAccountPDA,
+                    systemProgram: SystemProgram.programId,
+                })
+                .instruction();
+            const transaction1 = new Transaction().add(initializeInstruction);
+            const { blockhash } = await connection.getLatestBlockhash();
+            transaction1.recentBlockhash = blockhash;
+            transaction1.feePayer = walletPublicKey;
+
+            // Request wallet to sign, using the wallet adapter
+            const signedTransaction = await window.solana.signTransaction(transaction1);
+            // Ensure the transaction is serialized properly
+            const rawTransaction = signedTransaction.serialize();
+            // Send the signed transaction
+            const signature = await connection.sendRawTransaction(rawTransaction, {
+                skipPreflight: false,
+                preflightCommitment: 'confirmed',
+            });
+            await connection.confirmTransaction(signature, 'confirmed');
+            console.log("Initialized user account! Tx:", signature);
+        }
+
+      const lamports = new BN(toLamports(inputAmount));
+
+      // Anchor: deposit(instruction)
+      const ix = await program.methods
+        .deposit(lamports)
+        .accounts({
+          user: walletPublicKey,
+          vaultState: vaultStatePDA,
+          userAccount: userAccountPDA,
+          solVault: solVaultPDA,
+          systemProgram: SystemProgram.programId,
+        })
+        .instruction();
+
+      const tx = new Transaction().add(ix);
+
+      // Set recent blockhash, fee payer
+      tx.feePayer = walletPublicKey;
+      const { blockhash } = await connection.getLatestBlockhash();
+      tx.recentBlockhash = blockhash;
+      
+
+      // Request wallet to sign
       const signedTx = await window.solana.signTransaction(tx);
-  const rawTx = signedTx.serialize();
+
+      // Send signed TX to chain
+      const sig = await connection.sendRawTransaction(
+        signedTx.serialize(),
+        { skipPreflight: false }
+      );
 
       const payload = {
-        tx: Array.from(rawTx),
+        signature: sig,
         walletId: walletAddr,
         coinName: token.symbol,
         leverage,
@@ -551,6 +679,14 @@ function OrderPanel({ token, walletAddr }) {
       console.log("Position created:", data);
 
       setInputAmount(""); // Reset
+    } catch (e) {
+      console.error(e);
+      setFeedback("Deposit failed: " + (e.message || e.toString()));
+    } finally {
+      setIsSubmitting(false);
+    }
+
+      
     } catch (e) {
       console.error("Failed to submit order", e);
     }
@@ -942,21 +1078,24 @@ function PositionsTable({ walletAddr, socket, positions, setPositions, tokens })
                     return (
                       <tr key={transaction.id}>
                         <td>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                            {token && (
-                              <img src={token.img} alt={transaction.coinName} width="24" />
-                            )}
-                            <span>{transaction.coinName}</span>
-                          </div>
-                        </td>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        {token && (
+                          <img src={token.img} alt={transaction.coinName} width="24" />
+                        )}
+                        <span>{transaction.coinName}</span>
+                      </div>
+                      <div style={{ color: '#6d7887', fontSize: '0.85rem' }}>
+                        {transaction.leverage.toFixed(2)}x {transaction.positionType}
+                      </div>
+                    </td>
                         {/* Display other relevant transaction details below */}
-                        <td>\${transaction.collateral.toFixed(2)}</td>
-                        <td>\${transaction.collateral.toFixed(2)}</td>
-                        <td>\${(transaction.collateral / 1000000000).toFixed(2)}</td>
-                        <td>{transaction.entryPrice.toFixed(2)}</td>
-                        <td>\${transaction.liquidationPrice.toFixed(2)}</td>
-                        <td>{transaction.takeProfit.toFixed(2)}</td>
-                        <td>{transaction.stopLoss.toFixed(2)}</td>
+                        <td>${transaction.currentPnL.toFixed(2)}</td>
+                        <td>${transaction.currentPositionSize.toFixed(2)}</td>
+                        <td>${(transaction.collateral / 1000000000).toFixed(2)}</td>
+                        <td>{transaction.entryPrice.toFixed(2)} / {transaction.markPrice.toFixed(2)}</td>
+                        <td style={{ color: '#ffcc00' }}>${transaction.liquidationPrice.toFixed(2)}</td>
+                        <td style={{ color: '#00ff00' }}>{transaction.takeProfit.toFixed(2)}</td>
+                        <td style={{ color: '#ff0000' }}>{transaction.stopLoss.toFixed(2)}</td>
                         <td></td>
                       </tr>
                     );

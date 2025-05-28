@@ -56,36 +56,36 @@ const [solVaultPDA] = await anchor.web3.PublicKey.findProgramAddress(
   programId
 );
 
-// if (user) {
-//   console.log("User account not initialized. Initializing now...");
-//   const initializeInstruction = await program.methods.initializeUserAccount()
-//     .accounts({
-//       user: user.publicKey,
-//       userAccount: userAccountPDA,
-//       systemProgram: anchor.web3.SystemProgram.programId,
-//     })
-//     .instruction();
-//     const transaction1 = new Transaction().add(initializeInstruction);
+if (user) {
+  console.log("User account not initialized. Initializing now...");
+  const initializeInstruction = await program.methods.initializeUserAccount()
+    .accounts({
+      user: user.publicKey,
+      userAccount: userAccountPDA,
+      systemProgram: anchor.web3.SystemProgram.programId,
+    })
+    .instruction();
+    const transaction1 = new Transaction().add(initializeInstruction);
 
-//   // Get recent blockhash
-//   const { blockhash } = await connection.getLatestBlockhash();
-//   transaction1.recentBlockhash = blockhash; // Set the blockhash
-//   transaction1.feePayer = user.publicKey; // Set fee payer
+  // Get recent blockhash
+  const { blockhash } = await connection.getLatestBlockhash();
+  transaction1.recentBlockhash = blockhash; // Set the blockhash
+  transaction1.feePayer = user.publicKey; // Set fee payer
 
-//   // Sign the transaction
-//   await transaction1.sign(user); // Sign with the deployer's keypair
+  // Sign the transaction
+  await transaction1.sign(user); // Sign with the deployer's keypair
 
-//   // Send and confirm the transaction
-//   const signature1 = await connection.sendTransaction(transaction1, [user], {
-//       skipPreflight: false,
-//       preflightCommitment: 'confirmed',
-//   });
+  // Send and confirm the transaction
+  const signature1 = await connection.sendTransaction(transaction1, [user], {
+      skipPreflight: false,
+      preflightCommitment: 'confirmed',
+  });
 
-//   // Confirm the transaction
-//   await connection.confirmTransaction(signature1, 'confirmed');
-//   console.log("Initialized user account! Tx:", signature1);
+  // Confirm the transaction
+  await connection.confirmTransaction(signature1, 'confirmed');
+  console.log("Initialized user account! Tx:", signature1);
    
-// }
+}
 
 
 console.log("aa: ",user.publicKey);

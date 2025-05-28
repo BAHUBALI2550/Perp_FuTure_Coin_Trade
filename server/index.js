@@ -4,13 +4,19 @@ const axios = require('axios');
 const socketIO = require('socket.io');
 const { prismaClient } = require('../packages/db/src');
 const http = require('http');
-const { Connection, Keypair, PublicKey, SystemProgram, Transaction, sendAndConfirmTransaction } = require('@solana/web3.js');
+const { Connection, Keypair, PublicKey, SystemProgram, Transaction, sendAndConfirmTransaction, clusterApiUrl } = require('@solana/web3.js');
 require('dotenv').config();
 const app = express();
 app.use(cors({ origin: "http://localhost:5173" }));
 app.use(express.json());
 const PORT = 3001;
-const bs58 = require('bs58');
+const bs58 = require('bs58').default;
+const anchor = require('@coral-xyz/anchor');
+const { BN } = anchor; 
+const {NodeWallet} = require('@coral-xyz/anchor/dist/cjs/nodewallet').default;
+const idl = require("../escrow/trading_escrow/target/idl/trading_escrow.json");
+const NETWORK = clusterApiUrl("devnet");
+const PROGRAM_ID = new PublicKey("5ZHtRgU8gaPUMjUkWBFjxNF9o5m7Cr4jJ71PXTiE6TKc");
 
 const server = http.createServer(app);
 
@@ -44,6 +50,11 @@ io.on('connection', (socket) => {
     }
   });
 });
+
+function loadBackendKeypair() {
+  const secretKey = bs58.decode(process.env.BACKEND_PRIVATE_KEY);
+  return Keypair.fromSecretKey(secretKey);
+}
 
 function calculatePnL(position) {
   const { positionType, entryPrice, markPrice, currentPositionSize, leverage, currentPrice, collateral } = position;
@@ -267,7 +278,7 @@ setInterval(calculateFundingRate, 60 * 60 * 1000); //every hour
 app.post("/api/v1/buyorshort", async (req, res) => {
   try {
     const {
-      tx,
+      signature,
       walletId,
       coinName,
       leverage,
@@ -282,12 +293,12 @@ app.post("/api/v1/buyorshort", async (req, res) => {
       lastFeeCalculatedTime
     } = req.body;
 
-    const rawTxBuffer = Uint8Array.from(tx); // transaction.serialize()
+    // const rawTxBuffer = Uint8Array.from(tx); // transaction.serialize()
     
     // Submitting raw signed transaction
-    const txSignature = await connection.sendRawTransaction(rawTxBuffer);
-    await connection.confirmTransaction(txSignature);
-    console.log("✅ TX confirmed:", txSignature);
+    // const txSignature = await connection.sendRawTransaction(rawTxBuffer);
+    await connection.confirmTransaction(signature);
+    console.log("✅ TX confirmed:", signature);
 
     const data = await prismaClient.user.create({
       data: {
@@ -303,12 +314,12 @@ app.post("/api/v1/buyorshort", async (req, res) => {
         currentPnL,
         openTime,
         lastFeeCalculatedTime,
-        escrowAccount: txSignature,
+        escrowAccount: signature,
         vaultTokenAccount: 'as',
         onchainPositionId: '1'
       }
     });
-    res.json({ txSignature });
+    res.json({ signature });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: "Failed to enter the Transaction" });
@@ -371,6 +382,59 @@ app.delete("/api/v1/positions/:id", async (req, res) => {
     if (!position) {
       return res.status(404).json({ error: "Position not found" });
     }
+    // Example: You'd want to get correct values from the position record:
+    const payout = ((position.currentPositionSize) * 1e9) + position.currentPnL - position.totalFees;
+    const collateralAmount = new BN(Math.floor(Number(position.collateral))); // lamports!
+    const toTransferAmount = new BN(Math.floor(Number(payout))); // lamports!
+
+    if(toTransferAmount > 0) {
+    const backend = loadBackendKeypair();
+    const user = new PublicKey(position.walletId);
+    
+    // --- Anchor setup ---
+    const connection = new Connection(NETWORK, { commitment: 'confirmed' });
+    const wallet = new anchor.Wallet(backend);
+    const provider = new anchor.AnchorProvider(connection, wallet, { commitment: 'confirmed' });
+    anchor.setProvider(provider);
+    const program = new anchor.Program(idl, PROGRAM_ID);
+    // --- PDAs ---
+    const [vaultStatePDA] = await PublicKey.findProgramAddressSync(
+      [Buffer.from("vault-state")], PROGRAM_ID
+    );
+    const [userAccountPDA] = await PublicKey.findProgramAddressSync(
+      [Buffer.from("user-acct"), user.toBuffer()], PROGRAM_ID
+    );
+    const [solVaultPDA] = await PublicKey.findProgramAddressSync(
+      [Buffer.from("sol-vault")], PROGRAM_ID
+    );
+    // --- Build instruction ---
+    const ix = await program.methods
+      .liquidate(collateralAmount, toTransferAmount)
+      .accounts({
+        backendAuthority: backend.publicKey, // Backend auth
+        vaultState: vaultStatePDA,
+        userAccount: userAccountPDA,
+        backendWallet: backend.publicKey,    // Payout to this backend wallet
+        user: user,                          // End user wallet
+        solVault: solVaultPDA,
+        systemProgram: SystemProgram.programId,
+      })
+      .instruction();
+    // --- Build TX ---
+    const transaction = new Transaction().add(ix);
+    const blockhashObj = await connection.getLatestBlockhash();
+    transaction.recentBlockhash = blockhashObj.blockhash;
+    transaction.feePayer = backend.publicKey;
+    // --- Sign TX ---
+    transaction.sign(backend);
+    // --- Send & Confirm ---
+    const sig = await connection.sendTransaction(transaction, [backend], {
+    skipPreflight: false,
+    preflightCommitment: 'confirmed',
+});
+    await connection.confirmTransaction(sig, 'confirmed');
+    console.log("Funds released! TX signature:", sig);
+  }
 
     // Copy to UserClosed
     const closed = await prismaClient.userClosed.create({ data: { ...position, status: false, closeTime: new Date() } });
@@ -382,9 +446,9 @@ app.delete("/api/v1/positions/:id", async (req, res) => {
     const payoutLamports = Math.max(Math.floor(payoutSol), 0); 
 
     if (payoutLamports > 0) {
-      const secretKey = bs58.default.decode(process.env.BACKEND_PRIVATE_KEY);
+      const secretKey = bs58.decode(process.env.BACKEND_PRIVATE_KEY);
       const backendKeypair = Keypair.fromSecretKey(secretKey);
-      console.log(backendKeypair);
+      // console.log(backendKeypair);
 
       const tx = new Transaction().add(
         SystemProgram.transfer({
