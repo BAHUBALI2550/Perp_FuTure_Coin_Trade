@@ -8,8 +8,6 @@ import { utils, BN, Program } from '@coral-xyz/anchor';
 import {Buffer} from 'buffer';
 window.Buffer = window.Buffer || Buffer;
 
-// Assumes trading_escrow.json is in your public dir
-// and your build system can import JSON (or fetch it client-side)
 const PROGRAM_ID = "5ZHtRgU8gaPUMjUkWBFjxNF9o5m7Cr4jJ71PXTiE6TKc";
 const NETWORK = clusterApiUrl("devnet");
 
@@ -130,7 +128,7 @@ function TopNavbar({ setWalletAddr, setSocket, setPositions }) {
     provider.on("accountChanged", onAccountChanged);
 
     return () => {
-      // Phantom doesn't support `.off`
+      
     };
   }, [provider]);
 
@@ -192,8 +190,8 @@ function TopNavbar({ setWalletAddr, setSocket, setPositions }) {
   if (!provider) return;
   setErrorMsg("");
   try {
-    const wallet = await provider.connect({ onlyIfTrusted: false }); // force popup
-    setPubKey(wallet.publicKey); // update pubkey if user switched accounts
+    const wallet = await provider.connect({ onlyIfTrusted: false }); 
+    setPubKey(wallet.publicKey); // update pubkey if switched accounts
     setState(WALLET_STATES.CONNECTED);
     setWalletMenuOpen(false);
   } catch (err) {
@@ -487,7 +485,6 @@ function OrderPanel({ token, walletAddr }) {
   const [idl, setIdl] = useState(null);
 
   useEffect(() => {
-    // Load IDL json from public folder, only once
     (async () => {
       try {
         const res = await fetch('../escrow/trading_escrow/target/idl/trading_escrow.json');
@@ -623,7 +620,7 @@ function OrderPanel({ token, walletAddr }) {
 
       const lamports = new BN(toLamports(inputAmount));
 
-      // Anchor: deposit(instruction)
+      // Anchor, deposit
       const ix = await program.methods
         .deposit(lamports)
         .accounts({
@@ -637,7 +634,7 @@ function OrderPanel({ token, walletAddr }) {
 
       const tx = new Transaction().add(ix);
 
-      // Set recent blockhash, fee payer
+      
       tx.feePayer = walletPublicKey;
       const { blockhash } = await connection.getLatestBlockhash();
       tx.recentBlockhash = blockhash;
@@ -646,7 +643,6 @@ function OrderPanel({ token, walletAddr }) {
       // Request wallet to sign
       const signedTx = await window.solana.signTransaction(tx);
 
-      // Send signed TX to chain
       const sig = await connection.sendRawTransaction(
         signedTx.serialize(),
         { skipPreflight: false }
@@ -813,7 +809,7 @@ function PositionsTable({ walletAddr, socket, positions, setPositions, tokens })
   const [takeProfit, setTakeProfit] = useState("");
   const [stopLoss, setStopLoss] = useState("");
   const [showModal, setShowModal] = useState(false);
-                const [activeTab, setActiveTab] = useState('open'); // NEW: State for active tab
+                const [activeTab, setActiveTab] = useState('open');
               const [transactionHistory, setTransactionHistory] = useState([]);
 
   useEffect(() => {
@@ -905,84 +901,6 @@ function PositionsTable({ walletAddr, socket, positions, setPositions, tokens })
 
   return (
     <>
-      {/* <div className="positions-table">
-        <div className="positions-tabs">
-          <div className="positions-tab active">Open Positions</div>
-        </div>
-
-        <div className="positions-table-wrap">
-          <table className="positions-main-table">
-            <thead>
-              <tr>
-                <th>Position</th>
-                <th>Value</th>
-                <th>Size</th>
-                <th>Collateral</th>
-                <th>Entry / Mark Price</th>
-                <th>Liq. Price</th>
-                <th>Take Profit</th>
-                <th>Stop Loss</th>
-                <th><button className="close-all-btn">Close All</button></th>
-              </tr>
-            </thead>
-            <tbody>
-              {positions.length === 0 ? (
-                <tr>
-                  <td colSpan="9" className="positions-table-hint">No open positions</td>
-                </tr>
-              ) : (
-                positions.map((pos) => {
-
-                   const token = tokens.find(t => t.symbol.toUpperCase() === pos.coinName.toUpperCase());
-
-                  return (
-                  <tr key={pos.id}>
-                    <td>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        {token && (
-                          <img src={token.img} alt={pos.coinName} width="24" />
-                        )}
-                        <span>{pos.coinName}</span>
-                      </div>
-                      <div style={{ color: '#6d7887', fontSize: '0.85rem' }}>
-                        {pos.leverage.toFixed(2)}x {pos.positionType}
-                      </div>
-                    </td>
-                    <td>
-                      <div>{pos.currentPnL?.toFixed(4) || '0.00'}</div>
-                      <div
-                        style={{
-                          color: pos.currentPnL > 0 ? '#1fe180' : '#ff4d4f',
-                          fontSize: '0.85rem',
-                        }}
-                      >
-                        +PNL%
-                      </div>
-                    </td>
-                    <td>
-                      <div>${pos.currentPositionSize.toFixed(2)}</div>
-                      <div style={{ fontSize: '0.85rem', color: '#6d7887' }}>
-                        {(pos.currentPositionSize / pos.entryPrice).toFixed(4)} {pos.coinName}
-                      </div>
-                    </td>
-                    <td>
-                      ${(pos.collateral/1000000000).toFixed(2)} <button className="edit-btn">Edit</button>
-                    </td>
-                    <td>{pos.entryPrice.toFixed(2)} / {pos.markPrice.toFixed(2)}</td>
-                    <td style={{ color: '#ffcc00' }}>${pos.liquidationPrice.toFixed(2)}</td>
-                    <td><button className="tp-btn" onClick={() => openModal(pos)}>Add TP</button></td>
-                    <td><button className="sl-btn" onClick={() => openModal(pos)}>Add SL</button></td>
-                    <td><button className="close-btn" onClick={() => handleClose(pos.id)}>Close</button></td>
-                  </tr>
-                );
-})
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div> */}
-
-
       <div className="positions-table">
         <div className="positions-tabs">
           <div 

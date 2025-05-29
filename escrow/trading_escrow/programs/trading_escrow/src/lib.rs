@@ -3,7 +3,7 @@ use anchor_lang::prelude::*;
 
 declare_id!("5ZHtRgU8gaPUMjUkWBFjxNF9o5m7Cr4jJ71PXTiE6TKc");
 
-// Error codes for better debugging
+// Error codes
 #[error_code]
 pub enum ErrorCode {
     #[msg("Unauthorized backend")]
@@ -118,7 +118,7 @@ pub mod trading_escrow {
             ctx.accounts.sol_vault.to_account_info(),
             ctx.accounts.backend_wallet.to_account_info(),
         ],
-        &[&[b"sol-vault", &[sol_vault_bump]]], // Use correct bump seed
+        &[&[b"sol-vault", &[sol_vault_bump]]], 
     )?;
 
         // If backend needs to return some funds to the user (e.g. after a stoploss triggers)

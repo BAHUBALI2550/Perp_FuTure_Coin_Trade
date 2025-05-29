@@ -4,7 +4,7 @@ import { Connection, Keypair, PublicKey, clusterApiUrl, Transaction, SystemProgr
 import NodeWallet from '@coral-xyz/anchor/dist/cjs/nodewallet.js'; 
 import idl from "../../../target/idl/trading_escrow.json" with { type: "json" };
 
-// Function to load keypair from JSON file
+// Function to load keypair
 function loadKeypairFromFile(filename) {
     const secret = Uint8Array.from(JSON.parse(readFileSync(filename)));
     return Keypair.fromSecretKey(secret);
@@ -15,13 +15,12 @@ async function isAccountInitialized(connection, publicKey) {
     return accountInfo !== null && accountInfo.owner.equals(programId);
 }
 
-
-// Load wallets
+// wallet
 const deployer = loadKeypairFromFile('deployer.json');
 const backend = loadKeypairFromFile('backend_keypair.json');
 const vault = loadKeypairFromFile('vault_keypair.json');
 
-// Initialize Provider
+// Provider
 const connection = new Connection(clusterApiUrl("devnet"), {
     commitment: "processed"
 });
@@ -32,11 +31,11 @@ const provider = new anchor.AnchorProvider(connection, wallet, {
 });
 anchor.setProvider(provider);
 
-// Your program ID
+// program ID
 const programId = new PublicKey("5ZHtRgU8gaPUMjUkWBFjxNF9o5m7Cr4jJ71PXTiE6TKc");
 const program = new anchor.Program(idl, programId);
 
-// Generate PDAs for vault_state and sol_vault
+// PDAs 
 const [vaultStatePDA] = await PublicKey.findProgramAddress(
     [Buffer.from("vault-state")],
     programId
@@ -50,7 +49,6 @@ const [solVaultPDA] = await PublicKey.findProgramAddress(
 const vaultStateInitialized = await isAccountInitialized(connection, vaultStatePDA);
 if (!vaultStateInitialized) {
 // Create an instruction to initialize the contract
-console.log("aa");
 const instruction = await program.methods
     .initialize(backend.publicKey) // Pass the backend wallet public key
     .accounts({
@@ -63,18 +61,17 @@ const instruction = await program.methods
 
     // console.log("Instruction Object:", instruction);
 
-// Create a new transaction
+// new transaction
 const transaction = new Transaction().add(instruction);
 
-// Get recent blockhash
 const { blockhash } = await connection.getLatestBlockhash();
-transaction.recentBlockhash = blockhash; // Set the blockhash
-transaction.feePayer = deployer.publicKey; // Set fee payer
+transaction.recentBlockhash = blockhash; 
+transaction.feePayer = deployer.publicKey; 
 
-// Sign the transaction
-await transaction.sign(deployer); // Sign with the deployer's keypair
+// Sign transaction
+await transaction.sign(deployer);
 
-// Send and confirm the transaction
+// Send and confirm
 const signature = await connection.sendTransaction(transaction, [deployer], {
     skipPreflight: false,
     preflightCommitment: 'confirmed',
