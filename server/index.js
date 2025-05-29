@@ -138,8 +138,15 @@ async function updatePositionPrice() {
     console.log(`⛔ Closing position ${position.id} for user ${position.walletId}: ${closeReason}`);
 
       const user = new PublicKey(position.walletId);
-            const backend = loadBackendKeypair(); // Load the backend wallet keypair
-            const connection = new Connection(NETWORK, { commitment: 'confirmed' });
+      const backend = loadBackendKeypair(); // Load the backend wallet keypair
+      const connection = new Connection(NETWORK, { commitment: 'confirmed' });
+      const wallet = new anchor.Wallet(backend);
+      const provider = new anchor.AnchorProvider(connection, wallet, { commitment: 'confirmed' });
+      anchor.setProvider(provider);
+      const program = new anchor.Program(idl, PROGRAM_ID);
+
+
+
             // Transfer collateral from vault to backend wallet
             const collateralAmount = new BN(Math.floor(Number(position.collateral))); 
             let toTransferAmount = 0;
@@ -161,27 +168,32 @@ async function updatePositionPrice() {
               [Buffer.from("sol-vault")], PROGRAM_ID
             );
 
-            const ix = await program.methods.liquidate(collateralAmount, toTransferAmount).accounts({
-                backendAuthority: backend.publicKey,
-                vaultState: vaultStatePDA,
-                userAccount: userAccountPDA,
-                backendWallet: backend.publicKey,
-                user: user,
-                solVault: solVaultPDA,
-                systemProgram: SystemProgram.programId,
-            }).instruction();
-            // Create and send the transaction for liquidating the collateral
-            const transaction = new Transaction().add(ix);
-            const blockhashObj = await connection.getLatestBlockhash();
-            transaction.recentBlockhash = blockhashObj.blockhash;
-            transaction.feePayer = backend.publicKey;
-            transaction.sign(backend);
-            const sig = await connection.sendTransaction(transaction, [backend], {
-                skipPreflight: false,
-                preflightCommitment: 'confirmed'
-            });
-            await connection.confirmTransaction(sig, 'confirmed');
-            console.log("Collateral transferred to backend wallet! TX signature:", sig);
+            const ix = await program.methods
+            .liquidate(collateralAmount, toTransferAmount)
+            .accounts({
+              backendAuthority: backend.publicKey, // Backend auth
+              vaultState: vaultStatePDA,
+              userAccount: userAccountPDA,
+              backendWallet: backend.publicKey,    // Payout to this backend wallet
+              user: user,                          // End user wallet
+              solVault: solVaultPDA,
+              systemProgram: SystemProgram.programId,
+            })
+            .instruction();
+          // Build TX 
+          const transaction = new Transaction().add(ix);
+          const blockhashObj = await connection.getLatestBlockhash();
+          transaction.recentBlockhash = blockhashObj.blockhash;
+          transaction.feePayer = backend.publicKey;
+          // Sign 
+          transaction.sign(backend);
+          // Send 
+          const sig = await connection.sendTransaction(transaction, [backend], {
+          skipPreflight: false,
+          preflightCommitment: 'confirmed',
+      });
+          await connection.confirmTransaction(sig, 'confirmed');
+          console.log("Funds released! TX signature:", sig);
           
 
       await prismaClient.userClosed.create({

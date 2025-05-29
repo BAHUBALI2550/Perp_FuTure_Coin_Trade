@@ -202,8 +202,8 @@ function TopNavbar({ setWalletAddr, setSocket, setPositions }) {
   return (
     <nav className="navbar w-full bg-white dark:bg-zinc-950 shadow flex justify-between items-center p-0 lg:px-8 px-3 py-2 z-50 relative transition-colors duration-300">
       <div className="navbar-left flex items-center gap-2 md:gap-4">
-        <img src="https://cdn.jsdelivr.net/gh/solana-labs/explorer/public/favicon.ico" className="logo h-9 w-9 rounded-xl hover:scale-105 shadow transition-transform" alt="Logo" />
-        <span className="brand text-xl font-bold text-purple-600 dark:text-violet-300 tracking-widest ml-2 select-none">Jup.ag</span>
+        <img src="https://www.shutterstock.com/shutterstock/photos/2464799453/display_1500/stock-photo-macro-detail-of-a-bitcoin-token-with-gold-yellow-and-orange-red-contrasted-colors-btc-crypto-coin-2464799453.jpg" className="logo h-9 w-9 rounded-xl hover:scale-105 shadow transition-transform" alt="Logo" />
+        <span className="brand text-xl font-bold text-purple-600 dark:text-violet-300 tracking-widest ml-2 select-none">Perp.ag</span>
         <span className="nav-item ml-3 text-zinc-700 dark:text-zinc-100 font-semibold hover:text-purple-600 cursor-pointer transition-colors">Spot</span>
         <span className="nav-new text-xs px-1.5 py-0.5 font-bold rounded bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white dark:from-violet-600 dark:to-fuchsia-600 ml-1 animate-bounce shadow-sm">New</span>
         <span className="nav-item nav-perps ml-3 text-zinc-700 dark:text-zinc-100 font-semibold hover:text-fuchsia-600 cursor-pointer transition-colors">Perps</span>
